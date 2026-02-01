@@ -442,9 +442,7 @@
     <div class="container">
         <h1>🎨 画像エディタ</h1>
 
-        <div class="info-box">
-            <span>💡 画像を読み込んで編集できます。Deleteキーで削除、四隅ハンドルでリサイズ可能です。</span>
-        </div>
+
 
         <div class="toolbar">
             <!-- 画像読み込み -->
@@ -549,7 +547,7 @@
                 <div class="custom-assets-area">
                     <label style="font-size: 0.8em; color: #666;">カスタム吹き出し</label>
                     <button class="custom-btn" onclick="document.getElementById('bubbleInput').click()">➕ 画像追加</button>
-                    <input type="file" id="bubbleInput" class="custom-file-input" accept="image/*">
+                    <input type="file" id="bubbleInput" class="custom-file-input" accept="image/*" multiple>
                     <div id="customBubbleList" class="custom-list"></div>
                 </div>
 
@@ -763,15 +761,24 @@
             // 画像を50%スケールで描画
             ctx.drawImage(originalImage, 0, 0, canvas.width, canvas.height);
 
-            // 要素を描画
+            // Pass 1: 吹き出しの枠線を描画 (すべての吹き出し)
             elements.forEach(element => {
-                if (element.type === 'text') {
-                    drawText(element);
-                } else if (element.type === 'bubble') {
-                    drawBubble(element);
+                if (element.type === 'bubble') {
+                    drawBubble(element, 'stroke');
                 }
+            });
 
-                // 選択中の要素にハンドルを表示
+            // Pass 2: 吹き出しの塗りとテキストを描画 (順序通り)
+            elements.forEach(element => {
+                if (element.type === 'bubble') {
+                    drawBubble(element, 'fill');
+                } else if (element.type === 'text') {
+                    drawText(element);
+                }
+            });
+
+            // Pass 3: 選択ハンドルの描画 (最前面)
+            elements.forEach(element => {
                 if (selectedElements.includes(element)) {
                     drawSelectionHandles(element);
                 }
@@ -829,7 +836,7 @@
         }
 
         // 吹き出し描画（雲ロジック削除）
-        function drawBubble(element) {
+        function drawBubble(element, mode = 'full') {
             ctx.save();
 
             const x = element.x * displayScale;
@@ -845,16 +852,13 @@
             ctx.lineWidth = 2 * displayScale;
 
             ctx.beginPath();
+            let isVector = true;
 
             if (element.shape === 'rect') {
                 ctx.rect(x - width / 2, y - height / 2, width, height);
-                ctx.fill();
-                ctx.stroke();
             } else if (element.shape === 'round') {
                 // 楕円
                 ctx.ellipse(x, y, width / 2, height / 2, 0, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.stroke();
             } else if (element.shape === 'flash') {
                 // フラッシュ
                 const spikes = 80;
@@ -880,15 +884,21 @@
                 }
                 ctx.lineTo(x, y - outerRadiusY);
                 ctx.closePath();
-                ctx.fill();
-                ctx.stroke();
             } else if (element.shape === 'custom' && element.imageObj) {
                 // カスタム画像描画
-                try {
-                    ctx.drawImage(element.imageObj, x - width / 2, y - height / 2, width, height);
-                } catch (e) {
-                    console.error('Image draw error', e);
+                isVector = false;
+                if (mode !== 'stroke') {
+                    try {
+                        ctx.drawImage(element.imageObj, x - width / 2, y - height / 2, width, height);
+                    } catch (e) {
+                        console.error('Image draw error', e);
+                    }
                 }
+            }
+
+            if (isVector) {
+                if (mode !== 'stroke') ctx.fill();
+                if (mode !== 'fill') ctx.stroke();
             }
 
             ctx.restore();
@@ -1402,6 +1412,58 @@
             const originalScale = displayScale;
             displayScale = 1.0;
 
+            // Pass 1: Bubbles check (Stroke)
+            elements.forEach(element => {
+                if (element.type === 'bubble') {
+                    exportCtx.save();
+                    exportCtx.globalAlpha = element.opacity || 1.0;
+                    exportCtx.strokeStyle = element.borderColor;
+                    exportCtx.lineWidth = 2;
+
+                    exportCtx.beginPath();
+                    const x = element.x;
+                    const y = element.y;
+                    const width = element.width;
+                    const height = element.height;
+
+                    let hasPath = false;
+
+                    if (element.shape === 'rect') {
+                        exportCtx.rect(x - width / 2, y - height / 2, width, height);
+                        hasPath = true;
+                    } else if (element.shape === 'round') {
+                        exportCtx.ellipse(x, y, width / 2, height / 2, 0, 0, Math.PI * 2);
+                        hasPath = true;
+                    } else if (element.shape === 'flash') {
+                        const spikes = 80;
+                        const outerRadiusX = width / 2;
+                        const outerRadiusY = height / 2;
+                        const innerRadiusX = width / 2 * 0.85;
+                        const innerRadiusY = height / 2 * 0.85;
+                        let rot = Math.PI / 2 * 3;
+                        let step = Math.PI / spikes;
+                        exportCtx.moveTo(x, y - outerRadiusY);
+                        for (let i = 0; i < spikes; i++) {
+                            let cx = x + Math.cos(rot) * outerRadiusX;
+                            let cy = y + Math.sin(rot) * outerRadiusY;
+                            exportCtx.lineTo(cx, cy);
+                            rot += step;
+                            cx = x + Math.cos(rot) * innerRadiusX;
+                            cy = y + Math.sin(rot) * innerRadiusY;
+                            exportCtx.lineTo(cx, cy);
+                            rot += step;
+                        }
+                        exportCtx.lineTo(x, y - outerRadiusY);
+                        exportCtx.closePath();
+                        hasPath = true;
+                    }
+
+                    if (hasPath) exportCtx.stroke();
+                    exportCtx.restore();
+                }
+            });
+
+            // Pass 2: Bubbles (Fill) and Text
             elements.forEach(element => {
                 if (element.type === 'text') {
                     exportCtx.save();
@@ -1446,41 +1508,35 @@
                     exportCtx.save();
                     exportCtx.globalAlpha = element.opacity || 1.0;
                     exportCtx.fillStyle = element.color;
-                    exportCtx.strokeStyle = element.borderColor;
-                    exportCtx.lineWidth = 2;
-
-                    exportCtx.beginPath();
 
                     const x = element.x;
                     const y = element.y;
                     const width = element.width;
                     const height = element.height;
 
+                    exportCtx.beginPath();
+                    let hasPath = false;
+
                     if (element.shape === 'rect') {
                         exportCtx.rect(x - width / 2, y - height / 2, width, height);
-                        exportCtx.fill();
-                        exportCtx.stroke();
+                        hasPath = true;
                     } else if (element.shape === 'round') {
                         exportCtx.ellipse(x, y, width / 2, height / 2, 0, 0, Math.PI * 2);
-                        exportCtx.fill();
-                        exportCtx.stroke();
+                        hasPath = true;
                     } else if (element.shape === 'flash') {
                         const spikes = 80;
                         const outerRadiusX = width / 2;
                         const outerRadiusY = height / 2;
                         const innerRadiusX = width / 2 * 0.85;
                         const innerRadiusY = height / 2 * 0.85;
-
                         let rot = Math.PI / 2 * 3;
                         let step = Math.PI / spikes;
-
                         exportCtx.moveTo(x, y - outerRadiusY);
                         for (let i = 0; i < spikes; i++) {
                             let cx = x + Math.cos(rot) * outerRadiusX;
                             let cy = y + Math.sin(rot) * outerRadiusY;
                             exportCtx.lineTo(cx, cy);
                             rot += step;
-
                             cx = x + Math.cos(rot) * innerRadiusX;
                             cy = y + Math.sin(rot) * innerRadiusY;
                             exportCtx.lineTo(cx, cy);
@@ -1488,8 +1544,7 @@
                         }
                         exportCtx.lineTo(x, y - outerRadiusY);
                         exportCtx.closePath();
-                        exportCtx.fill();
-                        exportCtx.stroke();
+                        hasPath = true;
                     } else if (element.shape === 'custom' && element.imageObj) {
                         try {
                             exportCtx.drawImage(element.imageObj, x - width / 2, y - height / 2, width, height);
@@ -1497,6 +1552,8 @@
                             console.error('Export draw error', e);
                         }
                     }
+
+                    if (hasPath) exportCtx.fill();
                     exportCtx.restore();
                 }
             });
@@ -1699,22 +1756,27 @@
         // ------------------------------------------
 
         document.getElementById('bubbleInput').addEventListener('change', function (e) {
-            const file = e.target.files[0];
-            if (!file) return;
+            const files = e.target.files;
+            if (!files || files.length === 0) return;
 
-            const reader = new FileReader();
-            reader.onload = function (evt) {
-                const dataUrl = evt.target.result;
-
-                addToDB('bubbles', {
-                    content: dataUrl,
-                    name: file.name
-                }).then(() => {
-                    loadCustomBubbles();
+            const promises = Array.from(files).map(file => {
+                return new Promise((resolve) => {
+                    const reader = new FileReader();
+                    reader.onload = function (evt) {
+                        const dataUrl = evt.target.result;
+                        addToDB('bubbles', {
+                            content: dataUrl,
+                            name: file.name
+                        }).then(resolve);
+                    };
+                    reader.readAsDataURL(file);
                 });
-            };
-            reader.readAsDataURL(file);
-            this.value = '';
+            });
+
+            Promise.all(promises).then(() => {
+                loadCustomBubbles();
+                this.value = '';
+            });
         });
 
         async function loadCustomBubbles() {
