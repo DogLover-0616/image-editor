@@ -582,7 +582,7 @@
                     <div id="customBubbleList" class="custom-list"></div>
                 </div>
 
-                <!-- 7. 吹き出し色・吹き出し枠色 (横並び) -->
+                <!-- 7. 吹き出し色・吹き出し枠色・枠線幅 (横並び) -->
                 <div class="property-group horizontal-group">
                     <div style="flex: 1;">
                         <label>背景色</label>
@@ -591,6 +591,10 @@
                     <div style="flex: 1;">
                         <label>枠色</label>
                         <input type="color" id="bubbleBorderColor" value="#000000">
+                    </div>
+                    <div style="flex: 1;">
+                        <label>枠線幅</label>
+                        <input type="number" id="bubbleBorderWidth" value="2" min="0" max="50">
                     </div>
                 </div>
 
@@ -762,9 +766,11 @@
             // 現在の設定値をDOMから取得
             const currentColor = document.getElementById('bubbleColor').value;
             const currentBorderColor = document.getElementById('bubbleBorderColor').value;
+            const currentBorderWidth = parseInt(document.getElementById('bubbleBorderWidth').value) || 2;
 
             // 四角・丸・フラッシュの場合はデフォルト透明度を70%に強制変更
             if (['rect', 'round', 'flash'].includes(shape)) {
+                // document.getElementById('bubbleOpacity').value = 70; // ユーザーが設定した値を尊重する方がよいかも？一旦コメントアウトせずそのままにしておくか、要件次第。元のコードは強制変更している。
                 document.getElementById('bubbleOpacity').value = 70;
             }
 
@@ -779,6 +785,7 @@
                 height: 150,
                 color: currentColor,
                 borderColor: currentBorderColor,
+                borderWidth: currentBorderWidth,
                 opacity: currentOpacity
             };
 
@@ -886,7 +893,7 @@
             targetCtx.globalAlpha = opacity;
             targetCtx.fillStyle = element.color;
             targetCtx.strokeStyle = element.borderColor;
-            targetCtx.lineWidth = 2 * scale;
+            targetCtx.lineWidth = (element.borderWidth !== undefined ? element.borderWidth : 2) * scale;
 
             drawBubblePath(targetCtx, element, scale);
 
@@ -1083,7 +1090,7 @@
 
             ctx.fillStyle = element.color;
             ctx.strokeStyle = element.borderColor;
-            ctx.lineWidth = 2 * displayScale;
+            ctx.lineWidth = (element.borderWidth !== undefined ? element.borderWidth : 2) * displayScale;
 
             ctx.beginPath();
             let isVector = true;
@@ -1523,6 +1530,7 @@
             } else if (selectedElement.type === 'bubble') {
                 document.getElementById('bubbleColor').value = selectedElement.color;
                 document.getElementById('bubbleBorderColor').value = selectedElement.borderColor;
+                document.getElementById('bubbleBorderWidth').value = selectedElement.borderWidth !== undefined ? selectedElement.borderWidth : 2;
                 const opacity = Math.round((selectedElement.opacity || 1.0) * 100);
                 document.getElementById('bubbleOpacity').value = opacity;
             }
@@ -1602,6 +1610,13 @@
         document.getElementById('bubbleBorderColor').addEventListener('input', function () {
             if (selectedElement && selectedElement.type === 'bubble') {
                 selectedElement.borderColor = this.value;
+                render();
+            }
+        });
+
+        document.getElementById('bubbleBorderWidth').addEventListener('input', function () {
+            if (selectedElement && selectedElement.type === 'bubble') {
+                selectedElement.borderWidth = parseInt(this.value);
                 render();
             }
         });
@@ -2005,6 +2020,23 @@
             });
         }
 
+        // データの更新 (put)
+        function putToDB(storeName, data) {
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([storeName], 'readwrite');
+                const store = transaction.objectStore(storeName);
+                const request = store.put(data);
+
+                request.onsuccess = function (e) {
+                    resolve(e.target.result);
+                };
+
+                request.onerror = function (e) {
+                    reject(e);
+                };
+            });
+        }
+
         // 初期化処理
         initDB().then(() => {
             loadCustomFonts();
@@ -2150,7 +2182,8 @@
                         const dataUrl = evt.target.result;
                         addToDB('bubbles', {
                             content: dataUrl,
-                            name: file.name
+                            name: file.name,
+                            order: 9999 // 新規追加は末尾
                         }).then(resolve);
                     };
                     reader.readAsDataURL(file);
@@ -2165,6 +2198,14 @@
 
         async function loadCustomBubbles() {
             const bubbles = await getAllFromDB('bubbles');
+
+            // order順にソート (orderがない場合は無限大=後ろに、同じならID順など適当に)
+            bubbles.sort((a, b) => {
+                const orderA = a.order !== undefined ? a.order : Number.MAX_SAFE_INTEGER;
+                const orderB = b.order !== undefined ? b.order : Number.MAX_SAFE_INTEGER;
+                return orderA - orderB;
+            });
+
             const list = document.getElementById('customBubbleList');
             list.innerHTML = '';
 
@@ -2172,6 +2213,16 @@
                 const div = document.createElement('div');
                 div.className = 'custom-item';
                 div.style.backgroundImage = `url(${bubble.content})`;
+                div.setAttribute('data-id', bubble.id); // IDを保持
+
+                // ドラッグ＆ドロップ属性
+                div.draggable = true;
+
+                // イベントリスナー
+                div.addEventListener('dragstart', handleDragStart);
+                div.addEventListener('dragover', handleDragOver);
+                div.addEventListener('drop', handleDrop);
+                div.addEventListener('dragend', handleDragEnd);
 
                 // 削除ボタン
                 const delBtn = document.createElement('div');
@@ -2208,6 +2259,71 @@
             }
         }
 
+        // ドラッグ＆ドロップ関連変数
+        let dragSrcEl = null;
+
+        function handleDragStart(e) {
+            dragSrcEl = this;
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', this.getAttribute('data-id'));
+            this.style.opacity = '0.4';
+        }
+
+        function handleDragOver(e) {
+            if (e.preventDefault) {
+                e.preventDefault(); // ドロップを許可するために必須
+            }
+            e.dataTransfer.dropEffect = 'move';
+            return false;
+        }
+
+        function handleDrop(e) {
+            if (e.stopPropagation) {
+                e.stopPropagation();
+            }
+
+            if (dragSrcEl !== this) {
+                const list = document.getElementById('customBubbleList');
+                const allItems = Array.from(list.children);
+                const srcIndex = allItems.indexOf(dragSrcEl);
+                const targetIndex = allItems.indexOf(this);
+
+                if (srcIndex < targetIndex) {
+                    this.after(dragSrcEl);
+                } else {
+                    this.before(dragSrcEl);
+                }
+
+                saveAllBubbleOrders();
+            }
+            return false;
+        }
+
+        function handleDragEnd(e) {
+            this.style.opacity = '1.0';
+        }
+
+        async function saveAllBubbleOrders() {
+            const list = document.getElementById('customBubbleList');
+            const items = Array.from(list.children);
+            const bubbles = await getAllFromDB('bubbles');
+
+            const bubbleMap = new Map();
+            bubbles.forEach(b => bubbleMap.set(b.id, b));
+
+            const updatePromises = items.map((item, index) => {
+                const id = parseInt(item.getAttribute('data-id'));
+                if (bubbleMap.has(id)) {
+                    const bubble = bubbleMap.get(id);
+                    bubble.order = index;
+                    return putToDB('bubbles', bubble);
+                }
+                return Promise.resolve();
+            });
+
+            await Promise.all(updatePromises);
+        }
+
         window.removeBubble = function (id) {
             if (confirm('この吹き出し画像を削除してよろしいですか？')) {
                 deleteFromDB('bubbles', id).then(() => {
@@ -2234,6 +2350,7 @@
                     y: canvas.height / 2 / displayScale,
                     color: '#ffffff', // カスタム画像には効かないがデータとして保持
                     borderColor: '#000000',
+                    borderWidth: 0, // カスタム画像の枠線はデフォルト0
                     opacity: 1.0,
                     source: dataUrl, // 保存用DataURL
                     imageObj: img // 描画用オブジェクト
