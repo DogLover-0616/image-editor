@@ -2053,7 +2053,7 @@
 
             const reader = new FileReader();
             reader.onload = function (evt) {
-                const fontData = evt.target.result; // ArrayBuffer
+                const fontData = evt.target.result; // Data URL string
                 const fontName = file.name.replace(/\.[^/.]+$/, ""); // 拡張子除去
 
                 // フォントロード
@@ -2061,69 +2061,77 @@
                     // DB保存
                     addToDB('fonts', {
                         name: fontName,
-                        content: fontData, // そのまま保存できない場合があるが、Blob推奨。ここではArrayBuffer
+                        content: fontData,
                         fileName: file.name
                     }).then(() => {
                         loadCustomFonts(); // リスト更新
                         alert(`フォント "${fontName}" を追加しました`);
                     });
                 }).catch(err => {
-                    alert('フォントの読み込みに失敗しました');
+                    alert('フォントの読み込みに失敗しました: ' + err.message);
                     console.error(err);
                 });
             };
-            reader.readAsArrayBuffer(file);
+            reader.readAsDataURL(file); // ArrayBuffer -> DataURL に変更
             this.value = '';
         });
 
         async function loadCustomFonts() {
-            const fonts = await getAllFromDB('fonts');
-            const list = document.getElementById('customFontList');
-            const select = document.getElementById('fontFamily');
+            try {
+                const fonts = await getAllFromDB('fonts');
+                const list = document.getElementById('customFontList');
+                const select = document.getElementById('fontFamily');
 
-            list.innerHTML = '';
+                list.innerHTML = '';
 
-            // 既存のカスタムオプションをクリア（標準以外）
-            let optGroup = select.querySelector('optgroup[label="カスタム"]');
-            if (!optGroup) {
-                optGroup = document.createElement('optgroup');
-                optGroup.label = "カスタム";
-                select.appendChild(optGroup);
-            }
-            optGroup.innerHTML = ''; // クリア
+                // 既存のカスタムオプションをクリア（標準以外）
+                let optGroup = select.querySelector('optgroup[label="カスタム"]');
+                if (!optGroup) {
+                    optGroup = document.createElement('optgroup');
+                    optGroup.label = "カスタム";
+                    select.appendChild(optGroup);
+                }
+                optGroup.innerHTML = ''; // クリア
 
-            for (const font of fonts) {
-                // UIリストに追加 (表示)
-                const div = document.createElement('div');
-                div.style.display = 'flex';
-                div.style.alignItems = 'center';
-                div.style.justifyContent = 'space-between';
-                div.style.background = '#f1f1f1';
-                div.style.padding = '4px 8px';
-                div.style.borderRadius = '4px';
-                div.style.fontSize = '0.8em';
+                const loadPromises = fonts.map(font => {
+                    // UIリストに追加 (表示)
+                    const div = document.createElement('div');
+                    div.style.display = 'flex';
+                    div.style.alignItems = 'center';
+                    div.style.justifyContent = 'space-between';
+                    div.style.background = '#f1f1f1';
+                    div.style.padding = '4px 8px';
+                    div.style.borderRadius = '4px';
+                    div.style.fontSize = '0.8em';
 
-                div.innerHTML = `
+                    div.innerHTML = `
                     <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${font.name}</span>
                     <span class="font-delete-btn" onclick="removeFont(${font.id})" style="margin-left: 10px; cursor: pointer; color: #ff5252;">✖</span>
                 `;
-                list.appendChild(div);
+                    list.appendChild(div);
 
-                // プルダウンに追加 (引用符で囲む)
-                const option = document.createElement('option');
-                option.value = `"${font.name}"`; // スペース対応のため引用符で囲む
-                option.textContent = font.name;
-                optGroup.appendChild(option);
+                    // プルダウンに追加 (引用符で囲む)
+                    const option = document.createElement('option');
+                    option.value = `"${font.name}"`;
+                    option.textContent = font.name;
+                    optGroup.appendChild(option);
 
-                // まだロードされていない場合はロード
-                if (!document.fonts.check(`12px "${font.name}"`)) {
-                    loadFontToDocument(font.name, font.content);
-                }
+                    // フォントロード (既にロード済みかチェックはloadFontToDocument内では行わないが、エラーハンドリングする)
+                    return loadFontToDocument(font.name, font.content).catch(e => {
+                        console.error(`Failed to restore font ${font.name}:`, e);
+                    });
+                });
+
+                await Promise.all(loadPromises);
+
+            } catch (e) {
+                console.error("Error loading custom fonts:", e);
             }
         }
 
         function loadFontToDocument(name, data) {
-            const fontFace = new FontFace(name, data);
+            // data is Data URL
+            const fontFace = new FontFace(name, `url(${data})`);
             return fontFace.load().then(loadedFace => {
                 document.fonts.add(loadedFace);
                 return loadedFace;
