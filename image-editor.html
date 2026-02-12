@@ -703,6 +703,18 @@
                     const img = new Image();
                     img.onload = function () {
                         originalImage = img;
+
+                        // 画面サイズに合わせてスケール調整
+                        const wrapperElement = document.querySelector('.canvas-wrapper');
+                        const padding = 40; // wrapper padding (20px * 2)
+                        const availableWidth = wrapperElement.clientWidth - padding;
+                        const availableHeight = (window.innerHeight * 0.8) - padding; // max-height: 80vh
+
+                        const scaleX = availableWidth / img.width;
+                        const scaleY = availableHeight / img.height;
+                        // 画面に収まるように縮小（拡大もしない場合は Math.min(1, ...) を追加）
+                        displayScale = Math.min(scaleX, scaleY);
+
                         canvas.width = img.width * displayScale;
                         canvas.height = img.height * displayScale;
                         // 新しい画像を読み込んだら要素をリセット
